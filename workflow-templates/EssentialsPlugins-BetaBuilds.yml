@@ -36,14 +36,93 @@ jobs:
       - name: Set Version Number
         shell: powershell
         run: |
-          $version = ./.github/scripts/GenerateVersionNumber.ps1          
-          echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $latestVersions = $(git tag --merged origin/main)
+          $latestVersion = [version]"0.0.0"
+          Foreach ($version in $latestVersions) {
+            Write-Host $version
+            try {
+              if (([version]$version) -ge $latestVersion) {
+                $latestVersion = $version
+                Write-Host "Setting latest version to: $latestVersion"
+              }
+            }
+            catch {
+              Write-Host "Unable to convert $($version). Skipping"
+              continue;
+            }
+          }
+
+          $newVersion = [version]$latestVersion
+          $phase = ""
+          $newVersionString = ""
+          switch -regex ($Env:GITHUB_REF) {
+            '^refs\/heads\/main*.' {
+              $newVersionString = "{0}.{1}.{2}" -f $newVersion.Major, $newVersion.Minor, $newVersion.Build
+            }
+            '^refs\/heads\/feature\/*.' {
+              $phase = 'alpha'
+              $newVersionString = "{0}.{1}.{2}-{3}-{4}" -f $newVersion.Major, $newVersion.Minor, ($newVersion.Build + 1), $phase, $Env:GITHUB_RUN_NUMBER
+            }
+            '^refs\/heads\/release\/*.' {
+              $splitRef = $Env:GITHUB_REF -split "/"
+              $version = [version]($splitRef[-1] -replace "v", "")
+              $phase = 'rc'
+              $newVersionString = "{0}.{1}.{2}-{3}-{4}" -f $version.Major, $version.Minor, $version.Build, $phase, $Env:GITHUB_RUN_NUMBER
+            }
+            '^refs\/heads\/dev*.' {
+              $phase = 'beta'
+              $newVersionString = "{0}.{1}.{2}-{3}-{4}" -f $newVersion.Major, $newVersion.Minor, ($newVersion.Build + 1), $phase, $Env:GITHUB_RUN_NUMBER
+            }
+            '^refs\/heads\/hotfix\/*.' {
+              $phase = 'hotfix'
+              $newVersionString = "{0}.{1}.{2}-{3}-{4}" -f $newVersion.Major, $newVersion.Minor, ($newVersion.Build + 1), $phase, $Env:GITHUB_RUN_NUMBER
+            }
+          }      
+          echo "VERSION=$newVersionString" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       # Use the version number to set the version of the assemblies
       - name: Update AssemblyInfo.cs
         shell: powershell
         run: |
-          Write-Output ${{ env.VERSION }}
-          ./.github/scripts/UpdateAssemblyVersion.ps1 ${{ env.VERSION }}
+          function Update-SourceVersion {
+          Param ([string]$Version)
+          #$fullVersion = $Version
+          $baseVersion = [regex]::Match($Version, "(\d+.\d+.\d+).*").captures.groups[1].value
+          $NewAssemblyVersion = 'AssemblyVersion("‘ + $baseVersion + ‘.*")'
+          Write-Output "AssemblyVersion = $NewAssemblyVersion"
+          $NewAssemblyInformationalVersion = 'AssemblyInformationalVersion("' + $Version + '")'
+          Write-Output "AssemblyInformationalVersion = $NewAssemblyInformationalVersion"
+
+          foreach ($o in $input) {
+              Write-output $o.FullName
+              $TmpFile = $o.FullName + ".tmp"
+              get-content $o.FullName |
+              ForEach-Object {
+                  $_ -replace 'AssemblyVersion\(".*"\)', $NewAssemblyVersion } |
+              ForEach-Object {
+                  $_ -replace 'AssemblyInformationalVersion\(".*"\)', $NewAssemblyInformationalVersion
+              }  > $TmpFile 
+              move-item $TmpFile $o.FullName -force
+            }
+          }
+
+          function Update-AllAssemblyInfoFiles ( $Env:VERSION ) {
+              foreach ($file in "AssemblyInfo.cs", "AssemblyInfo.vb" ) {
+                  get-childitem -Path $Env:GITHUB_WORKSPACE -recurse | Where-Object { $_.Name -eq $file } | Update-SourceVersion $version ;
+              }
+          }
+
+          # validate arguments
+          $r = [System.Text.RegularExpressions.Regex]::Match($args[0], "\d+\.\d+\.\d+.*");
+          if ($r.Success) {
+              Write-Output "Updating Assembly Version to $args ...";
+              Update-AllAssemblyInfoFiles $args[0];
+          }
+          else {
+              Write-Output " ";
+              Write-Output "Error: Input version does not match x.y.z format!"
+              Write-Output " ";
+              Write-Output "Unable to apply version to AssemblyInfo.cs files";
+          }
       - name: restore Nuget Packages
         run: nuget install .\packages.config -OutputDirectory .\packages -ExcludeVersion
       # Set the SOLUTION_PATH
@@ -75,7 +154,43 @@ jobs:
       # Zip up the output files as needed
       - name: Zip Build Output
         shell: powershell
-        run: ./.github/scripts/ZipBuildOutput.ps1
+        run: |
+          $destination = "$($Env:GITHUB_HOME)\output"
+          New-Item -ItemType Directory -Force -Path ($destination)
+          Get-ChildItem ($destination)
+          $exclusions = "packages"
+          # Trying to get any .json schema files (not currently working)
+          # Gets any files with the listed extensions.
+          Get-ChildItem -recurse -Path "$($Env:GITHUB_WORKSPACE)" -include "*.clz", "*.cpz", "*.cplz", "*.nuspec" | ForEach-Object {
+            $allowed = $true;
+            # Exclude any files in submodules
+            foreach ($exclude in $exclusions) {
+              if ((Split-Path $_.FullName -Parent).contains("$($exclude)")) {
+                $allowed = $false;
+                break;
+              }
+            }
+            if ($allowed) {
+              Write-Host "allowing $($_)"
+              $_;
+            }
+          } | Copy-Item -Destination ($destination) -Force
+          Write-Host "Getting matching files..."
+          # Get any files from the output folder that match the following extensions
+          Get-ChildItem -Path $destination | Where-Object {($_.Extension -eq ".clz") -or ($_.Extension -eq ".cpz" -or ($_.Extension -eq ".cplz"))} | ForEach-Object { 
+            # Replace the extensions with dll and xml and create an array 
+            $filenames = @($($_ -replace "cpz|clz|cplz", "dll"), $($_ -replace "cpz|clz|cplz", "xml"))
+            Write-Host "Filenames:"
+            Write-Host $filenames
+            if ($filenames.length -gt 0) {
+              # Attempt to get the files and return them to the output directory
+              Get-ChildItem -Recurse -Path "$($Env:GITHUB_WORKSPACE)" -include $filenames | Copy-Item -Destination ($destination) -Force
+            }
+          }
+          Get-ChildItem -Path $destination\*.cplz | Rename-Item -NewName { "$($_.BaseName)-$($Env:VERSION)$($_.Extension)" }
+          Compress-Archive -Path $destination -DestinationPath "$($Env:GITHUB_WORKSPACE)\$($Env:SOLUTION_FILE)-$($Env:VERSION).zip" -Force
+          Write-Host "Output Contents post Zip"
+          Get-ChildItem -Path $destination
       # Write the version to a file to be consumed by the push jobs
       - name: Write Version
         run: Write-Output "$($Env:VERSION)" | Out-File -FilePath "$($Env:GITHUB_HOME)\output\version.txt"
