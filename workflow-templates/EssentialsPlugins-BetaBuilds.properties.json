@@ -1,9 +1,5 @@
 {
     "name": "Essentials Plugins Beta Builds Workflow",
     "description": "Essentials Plugins Beta Builds Workflowtemplate.",
-    "iconName": "plugin",
-   
-    "filePatterns": [
-        ".sln"
-    ]
+    "iconName": "plugin"
 }
