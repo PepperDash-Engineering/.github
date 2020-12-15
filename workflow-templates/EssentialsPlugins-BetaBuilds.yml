@@ -46,7 +46,7 @@ jobs:
           ./.github/scripts/UpdateAssemblyVersion.ps1 ${{ env.VERSION }}
       - name: restore Nuget Packages
         run: nuget install .\packages.config -OutputDirectory .\packages -ExcludeVersion
-      # Se the SOLUTION_PAH
+      # Set the SOLUTION_PATH
       - name: Get SLN Path 
         shell: powershell
         run: |
@@ -55,12 +55,12 @@ jobs:
           $solution_path = $solution_path -replace "(?:[^\\]*\\){4}", ""
           Write-Output $solution_path
           echo "SOLUTION_PATH=$($solution_path)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        # Se the SOLUTION_FILe
+        # Set the SOLUTION_FILE
       - name: Get SLN File 
         shell: powershell
         run: |
           $solution_file = Get-ChildItem .\*.sln -recurse -Path "$($Env:GITHUB_WORKSPACE)" 
-          echo "SOLUTION_FILE=$($solution_file.Name)"| Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "SOLUTION_FILE=$($solution_file.BaseName)"| Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       # Login to Docker
       - name: Login to Docker
         uses: azure/docker-login@v1
@@ -143,6 +143,11 @@ jobs:
           Remove-Item -Path .\* -Include @("*.cpz","*.md","*.cplz","*.json","*.dll","*.clz")  
           Get-ChildItem -Path .\output\* | Copy-Item -Destination .\
           Remove-Item -Path .\output -Recurse
+      - name: Get nuget File 
+        shell: powershell
+        run: |
+          $nuspec_file = Get-ChildItem *.nuspec -recurse 
+          echo "NUSPEC_FILE=$($nuspec_file.BaseName)"| Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Add nuget.exe
         uses: nuget/setup-nuget@v1
       - name: Add Github Packages source
@@ -151,7 +156,7 @@ jobs:
       #- name: Add nuget.org API Key
       #  run: nuget setApiKey ${{ secrets.NUGET_API_KEY }}
       - name: Create nuget package
-        run: nuget pack "./${{ env.SOLUTION_FILE}}.nuspec" -version ${{ env.VERSION }}
+        run: nuget pack "./${{ env.NUSPEC_FILE}}.nuspec" -version ${{ env.VERSION }}
       - name: Publish nuget package to Github registry
         run: nuget push **/*.nupkg -source github
       # Pushes to nuget, not needed unless publishing publicly >> this pushes package to nuget.org
