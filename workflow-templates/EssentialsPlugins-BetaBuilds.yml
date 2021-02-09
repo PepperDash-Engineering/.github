@@ -14,7 +14,7 @@ env:
   # Defaults to debug for build type
   BUILD_TYPE: Debug
   # Defaults to master as the release branch.  Change as necessary
-  RELEASE_BRANCH: main
+  RELEASE_BRANCH: $default-branch
 jobs:
   Build_Project:
     runs-on: windows-latest
@@ -34,7 +34,7 @@ jobs:
         id: setVersionNumber
         shell: powershell
         run: |
-          $latestVersions = $(git tag --merged origin/main)
+          $latestVersions = $(git tag --merged origin/$default-branch)
           $latestVersion = [version]"0.0.0"
           Foreach ($version in $latestVersions) {
             Write-Host $version
@@ -54,7 +54,7 @@ jobs:
           $phase = ""
           $newVersionString = ""
           switch -regex ($Env:GITHUB_REF) {
-            '^refs\/heads\/main*.' {
+            '^refs\/heads\/$default-branch*.' {
               $newVersionString = "{0}.{1}.{2}" -f $newVersion.Major, $newVersion.Minor, $newVersion.Build
             }
             '^refs\/heads\/feature\/*.' {
